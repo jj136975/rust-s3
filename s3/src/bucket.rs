@@ -230,6 +230,27 @@ impl Bucket {
         request.presigned().await
     }
 
+    #[maybe_async::maybe_async]
+    pub async fn presign_get_custom<S: AsRef<str>>(
+        &self,
+        path: S,
+        custom_domain: impl AsRef<str> + Send + Clone,
+        expiry_secs: u32,
+        custom_queries: Option<HashMap<String, String>>,
+    ) -> Result<String, S3Error> {
+        validate_expiry(expiry_secs)?;
+        let request = RequestImpl::new(
+            self,
+            path.as_ref(),
+            Command::PresignGet {
+                expiry_secs,
+                custom_queries,
+            },
+        )
+            .await?;
+        request.presigned_custom(custom_domain).await
+    }
+
     /// Get a presigned url for posting an object to a given path
     ///
     /// # Example:

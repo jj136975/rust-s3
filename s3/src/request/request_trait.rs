@@ -226,6 +226,31 @@ pub trait Request {
         ))
     }
 
+    #[maybe_async::async_impl]
+    async fn presigned_custom(&self, custom_domain: impl AsRef<str> + Send + Clone) -> Result<String, S3Error> {
+        let (expiry, custom_headers, custom_queries) = match self.command() {
+            Command::PresignGet {
+                expiry_secs,
+                custom_queries,
+            } => (expiry_secs, None, custom_queries),
+            Command::PresignPut {
+                expiry_secs,
+                custom_headers,
+                custom_queries,
+            } => (expiry_secs, custom_headers, custom_queries),
+            Command::PresignDelete { expiry_secs } => (expiry_secs, None, None),
+            _ => unreachable!(),
+        };
+
+        Ok(format!(
+            "{}&X-Amz-Signature={}",
+            self.presigned_url_no_sig_custom(custom_domain.clone(), expiry, custom_headers.as_ref(), custom_queries.as_ref())
+                .await?,
+            self.presigned_authorization_custom(custom_domain, custom_headers.as_ref())
+                .await?
+        ))
+    }
+
     #[maybe_async::sync_impl]
     async fn presigned(&self) -> Result<String, S3Error> {
         let (expiry, custom_headers, custom_queries) = match self.command() {
@@ -249,6 +274,29 @@ pub trait Request {
         ))
     }
 
+    #[maybe_async::sync_impl]
+    async fn presigned_custom(&self, custom_domain: impl AsRef<str> + Clone) -> Result<String, S3Error> {
+        let (expiry, custom_headers, custom_queries) = match self.command() {
+            Command::PresignGet {
+                expiry_secs,
+                custom_queries,
+            } => (expiry_secs, None, custom_queries),
+            Command::PresignPut {
+                expiry_secs,
+                custom_headers,
+                ..
+            } => (expiry_secs, custom_headers, None),
+            Command::PresignDelete { expiry_secs } => (expiry_secs, None, None),
+            _ => unreachable!(),
+        };
+
+        Ok(format!(
+            "{}&X-Amz-Signature={}",
+            self.presigned_url_no_sig_custom(custom_domain.clone(), expiry, custom_headers.as_ref(), custom_queries.as_ref())?,
+            self.presigned_authorization(custom_domain, custom_headers.as_ref())?
+        ))
+    }
+
     async fn presigned_authorization(
         &self,
         custom_headers: Option<&HeaderMap>,
@@ -256,6 +304,30 @@ pub trait Request {
         let mut headers = HeaderMap::new();
         let host_header = self.host_header();
         headers.insert(HOST, host_header.parse()?);
+        if let Some(custom_headers) = custom_headers {
+            for (k, v) in custom_headers.iter() {
+                headers.insert(k.clone(), v.clone());
+            }
+        }
+        let canonical_request = self.presigned_canonical_request(&headers).await?;
+        let string_to_sign = self.string_to_sign(&canonical_request)?;
+        let mut hmac = signing::HmacSha256::new_from_slice(&self.signing_key().await?)?;
+        hmac.update(string_to_sign.as_bytes());
+        let signature = hex::encode(hmac.finalize().into_bytes());
+        // let signed_header = signing::signed_header_string(&headers);
+        Ok(signature)
+    }
+    async fn presigned_authorization_custom(
+        &self,
+        custom_domain: impl AsRef<str> + Send,
+        custom_headers: Option<&HeaderMap>,
+    ) -> Result<String, S3Error> {
+        let mut headers = HeaderMap::new();
+        let host = match custom_domain.as_ref().find("://") {
+            Some(pos) => custom_domain.as_ref()[pos + 3..].to_string(),
+            None => custom_domain.as_ref().to_string(),
+        };
+        headers.insert(HOST, host.parse()?);
         if let Some(custom_headers) = custom_headers {
             for (k, v) in custom_headers.iter() {
                 headers.insert(k.clone(), v.clone());
@@ -325,6 +397,38 @@ pub trait Request {
         Ok(url)
     }
 
+    #[maybe_async::async_impl]
+    async fn presigned_url_no_sig_custom(
+        &self,
+        custom_domain: impl AsRef<str> + Send,
+        expiry: u32,
+        custom_headers: Option<&HeaderMap>,
+        custom_queries: Option<&HashMap<String, String>>,
+    ) -> Result<Url, S3Error> {
+        let bucket = self.bucket();
+        let token = if let Some(security_token) = bucket.security_token().await? {
+            Some(security_token)
+        } else {
+            bucket.session_token().await?
+        };
+        let parsed_url = Url::parse(custom_domain.as_ref())?;
+        let url = Url::parse(&format!(
+            "{}{}{}",
+            parsed_url,
+            &signing::authorization_query_params_no_sig(
+                &self.bucket().access_key().await?.unwrap_or_default(),
+                &self.datetime(),
+                &self.bucket().region(),
+                expiry,
+                custom_headers,
+                token.as_ref()
+            )?,
+            &signing::flatten_queries(custom_queries)?,
+        ))?;
+
+        Ok(url)
+    }
+
     #[maybe_async::sync_impl]
     fn presigned_url_no_sig(
         &self,
@@ -341,6 +445,38 @@ pub trait Request {
         let url = Url::parse(&format!(
             "{}{}{}",
             self.url()?,
+            &signing::authorization_query_params_no_sig(
+                &self.bucket().access_key()?.unwrap_or_default(),
+                &self.datetime(),
+                &self.bucket().region(),
+                expiry,
+                custom_headers,
+                token.as_ref()
+            )?,
+            &signing::flatten_queries(custom_queries)?,
+        ))?;
+
+        Ok(url)
+    }
+
+    #[maybe_async::sync_impl]
+    fn presigned_url_no_sig_custom(
+        &self,
+        custom_domain: impl AsRef<str> + Send,
+        expiry: u32,
+        custom_headers: Option<&HeaderMap>,
+        custom_queries: Option<&HashMap<String, String>>,
+    ) -> Result<Url, S3Error> {
+        let bucket = self.bucket();
+        let token = if let Some(security_token) = bucket.security_token()? {
+            Some(security_token)
+        } else {
+            bucket.session_token()?
+        };
+        let parsed_url = Url::parse(custom_domain.as_ref())?;
+        let url = Url::parse(&format!(
+            "{}{}{}",
+            parsed_url,
             &signing::authorization_query_params_no_sig(
                 &self.bucket().access_key()?.unwrap_or_default(),
                 &self.datetime(),
