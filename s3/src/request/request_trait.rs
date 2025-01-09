@@ -333,7 +333,7 @@ pub trait Request {
                 headers.insert(k.clone(), v.clone());
             }
         }
-        let canonical_request = self.presigned_canonical_request(&headers).await?;
+        let canonical_request = self.presigned_canonical_request_custom(custom_domain, &headers).await?;
         let string_to_sign = self.string_to_sign(&canonical_request)?;
         let mut hmac = signing::HmacSha256::new_from_slice(&self.signing_key().await?)?;
         hmac.update(string_to_sign.as_bytes());
@@ -361,6 +361,31 @@ pub trait Request {
             &self.command().http_verb().to_string(),
             &self
                 .presigned_url_no_sig(expiry, custom_headers.as_ref(), custom_queries.as_ref())
+                .await?,
+            headers,
+            "UNSIGNED-PAYLOAD",
+        )
+    }
+
+    async fn presigned_canonical_request_custom(&self, custom_domain: impl AsRef<str> + Send, headers: &HeaderMap) -> Result<String, S3Error> {
+        let (expiry, custom_headers, custom_queries) = match self.command() {
+            Command::PresignGet {
+                expiry_secs,
+                custom_queries,
+            } => (expiry_secs, None, custom_queries),
+            Command::PresignPut {
+                expiry_secs,
+                custom_headers,
+                custom_queries,
+            } => (expiry_secs, custom_headers, custom_queries),
+            Command::PresignDelete { expiry_secs } => (expiry_secs, None, None),
+            _ => unreachable!(),
+        };
+
+        signing::canonical_request(
+            &self.command().http_verb().to_string(),
+            &self
+                .presigned_url_no_sig_custom(custom_domain, expiry, custom_headers.as_ref(), custom_queries.as_ref())
                 .await?,
             headers,
             "UNSIGNED-PAYLOAD",
