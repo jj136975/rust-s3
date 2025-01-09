@@ -227,7 +227,10 @@ pub trait Request {
     }
 
     #[maybe_async::async_impl]
-    async fn presigned_custom(&self, custom_domain: impl AsRef<str> + Send + Clone) -> Result<String, S3Error> {
+    async fn presigned_custom(
+        &self,
+        custom_domain: impl AsRef<str> + Send + Clone,
+    ) -> Result<String, S3Error> {
         let (expiry, custom_headers, custom_queries) = match self.command() {
             Command::PresignGet {
                 expiry_secs,
@@ -244,8 +247,13 @@ pub trait Request {
 
         Ok(format!(
             "{}&X-Amz-Signature={}",
-            self.presigned_url_no_sig_custom(custom_domain.clone(), expiry, custom_headers.as_ref(), custom_queries.as_ref())
-                .await?,
+            self.presigned_url_no_sig_custom(
+                custom_domain.clone(),
+                expiry,
+                custom_headers.as_ref(),
+                custom_queries.as_ref()
+            )
+            .await?,
             self.presigned_authorization_custom(custom_domain, custom_headers.as_ref())
                 .await?
         ))
@@ -275,7 +283,10 @@ pub trait Request {
     }
 
     #[maybe_async::sync_impl]
-    async fn presigned_custom(&self, custom_domain: impl AsRef<str> + Clone) -> Result<String, S3Error> {
+    async fn presigned_custom(
+        &self,
+        custom_domain: impl AsRef<str> + Clone,
+    ) -> Result<String, S3Error> {
         let (expiry, custom_headers, custom_queries) = match self.command() {
             Command::PresignGet {
                 expiry_secs,
@@ -292,7 +303,12 @@ pub trait Request {
 
         Ok(format!(
             "{}&X-Amz-Signature={}",
-            self.presigned_url_no_sig_custom(custom_domain.clone(), expiry, custom_headers.as_ref(), custom_queries.as_ref())?,
+            self.presigned_url_no_sig_custom(
+                custom_domain.clone(),
+                expiry,
+                custom_headers.as_ref(),
+                custom_queries.as_ref()
+            )?,
             self.presigned_authorization(custom_domain, custom_headers.as_ref())?
         ))
     }
@@ -333,7 +349,9 @@ pub trait Request {
                 headers.insert(k.clone(), v.clone());
             }
         }
-        let canonical_request = self.presigned_canonical_request_custom(custom_domain, &headers).await?;
+        let canonical_request = self
+            .presigned_canonical_request_custom(custom_domain, &headers)
+            .await?;
         let string_to_sign = self.string_to_sign(&canonical_request)?;
         let mut hmac = signing::HmacSha256::new_from_slice(&self.signing_key().await?)?;
         hmac.update(string_to_sign.as_bytes());
@@ -367,7 +385,11 @@ pub trait Request {
         )
     }
 
-    async fn presigned_canonical_request_custom(&self, custom_domain: impl AsRef<str> + Send, headers: &HeaderMap) -> Result<String, S3Error> {
+    async fn presigned_canonical_request_custom(
+        &self,
+        custom_domain: impl AsRef<str> + Send,
+        headers: &HeaderMap,
+    ) -> Result<String, S3Error> {
         let (expiry, custom_headers, custom_queries) = match self.command() {
             Command::PresignGet {
                 expiry_secs,
@@ -385,7 +407,12 @@ pub trait Request {
         signing::canonical_request(
             &self.command().http_verb().to_string(),
             &self
-                .presigned_url_no_sig_custom(custom_domain, expiry, custom_headers.as_ref(), custom_queries.as_ref())
+                .presigned_url_no_sig_custom(
+                    custom_domain,
+                    expiry,
+                    custom_headers.as_ref(),
+                    custom_queries.as_ref(),
+                )
                 .await?,
             headers,
             "UNSIGNED-PAYLOAD",
@@ -436,7 +463,13 @@ pub trait Request {
         } else {
             bucket.session_token().await?
         };
-        let parsed_url = Url::parse(custom_domain.as_ref())?;
+        let custom_url = format!(
+            "{}/{}/{}",
+            custom_domain.as_ref(),
+            self.bucket().name,
+            &signing::uri_encode(&self.path(), false)
+        );
+        let parsed_url = Url::parse(&custom_url)?;
         let url = Url::parse(&format!(
             "{}{}{}",
             parsed_url,
